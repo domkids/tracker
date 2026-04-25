@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DOM 🪎 Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+<!-- Firebase SDK -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, push, set, onValue, remove, update } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+  // ===== 🔧 CONFIG: แก้ตรงนี้ด้วย Firebase ของคุณ =====
+  const firebaseConfig = {
+  apiKey: "AIzaSyCVgeb0dUuWc4-205CcyfplXTmEbh_MPKQ",
+  authDomain: "dom-tracker39.firebaseapp.com",
+  projectId: "dom-tracker39",
+  storageBucket: "dom-tracker39.firebasestorage.app",
+  messagingSenderId: "705902530950",
+  appId: "1:705902530950:web:c3cc0e4637f457ee5adc07",
+  measurementId: "G-H0G7V313KN"
+};
+
+  // PIN สำหรับ 2 users (แก้ได้เลย)
+  const PINS = {
+    "417840": "Dom 🪎",
+    "866260": "Partner 💰"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getDatabase(app);
+
+  let currentUser = null;
+
+  // ===================== AUTH =====================
+  window.doLogin = function() {
+    const pin = document.getElementById('pinInput').value;
+    if (PINS[pin]) {
+      currentUser = PINS[pin];
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      document.getElementById('userLabel').textContent = currentUser;
+      loadAll();
+    } else {
+      document.getElementById('pinError').textContent = '❌ PIN ไม่ถูกต้อง';
+      document.getElementById('pinInput').value = '';
+    }
+  };
+
+  window.doLogout = function() {
+    currentUser = null;
+    document.getElementById('loginScreen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('pinInput').value = '';
+    document.getElementById('pinError').textContent = '';
+  };
+
+  // ===================== LOAD ALL =====================
+  function loadAll() {
+    listenSales();
+    listenPayouts();
+    listenExpenses();
+    listenStock();
+  }
+
+  // ===================== SALES =====================
+  function listenSales() {
+    onValue(ref(db, 'sales'), snap => {
+      const data = snap.val() || {};
+      renderSales(data);
+      recalcDashboard(data, null, null, null, true);
+    });
+  }
+
+  function renderSales(data) {
+    const list = document.getElementById('salesList');
+    list.innerHTML = '';
+    let totalPaid = 0, totalPending = 0;
+    Object.entries(data).forEach(([id, row]) => {
+      if (row.status === 'paid') totalPaid += Number(row.amount) || 0;
+      else totalPending += Number(row.amount) || 0;
+      const div = document.createElement('div');
+      div.className = `row-item ${row.status === 'paid' ? 'paid' : 'pending'}`;
+      div.innerHTML = `
+        <div class="row-main">
+          <span class="badge ${row.status === 'paid' ? 'badge-green' : 'badge-red'}">${row.status === 'paid' ? '✅' : '❌'}</span>
+          <span class="row-name">${row.customer}</span>
+          <span class="row-amount">฿${Number(row.amount||0).toLocaleString()}</span>
+        </div>
+        <div class="row-sub">${row.qty ? row.qty + ' ซอง' : ''} ${row.date || ''} ${row.note ? '· ' + row.note : ''}</div>
+        <div class="row-actions">
+          <button onclick="toggleSaleStatus('${id}','${row.status}')" class="btn-action btn-toggle">${row.status === 'paid' ? '↩ ค้างจ่าย' : '✓ จ่ายแล้ว'}</button>
+          <button onclick="deleteSale('${id}')" class="btn-action btn-del">🗑</button>
+        </div>`;
+      list.appendChild(div);
+    });
+    document.getElementById('salesPaid').textContent = '฿' + totalPaid.toLocaleString();
+    document.getElementById('salesPending').textContent = '฿' + totalPending.toLocaleString();
+    updateDashboard();
+  }
+
+  window.addSale = function() {
+    const customer = document.getElementById('s_customer').value.trim();
+    const qty = document.getElementById('s_qty').value;
+    const amount = document.getElementById('s_amount').value;
+    const date = document.getElementById('s_date').value;
+    const note = document.getElementById('s_note').value.trim();
+    const status = document.getElementById('s_status').value;
+    if (!customer || !amount) return alert('กรุณากรอกชื่อและยอดเงิน');
+    push(ref(db, 'sales'), { customer, qty: Number(qty)||0, amount: Number(amount), date, note, status, by: currentUser, ts: Date.now() });
+    ['s_customer','s_qty','s_amount','s_note'].forEach(id => document.getElementById(id).value = '');
+    closeModal('modalSale');
+  };
+
+  window.toggleSaleStatus = function(id, current) {
+    update(ref(db, 'sales/' + id), { status: current === 'paid' ? 'pending' : 'paid' });
+  };
+
+  window.deleteSale = function(id) {
+    if (confirm('ลบรายการนี้?')) remove(ref(db, 'sales/' + id));
+  };
+
+  // ===================== PAYOUTS =====================
+  function listenPayouts() {
+    onValue(ref(db, 'payouts'), snap => {
+      const data = snap.val() || {};
+      renderPayouts(data);
+    });
+  }
+
+  function renderPayouts(data) {
+    const list = document.getElementById('payoutsList');
+    list.innerHTML = '';
+    let total = 0;
+    Object.entries(data).forEach(([id, row]) => {
+      total += Number(row.amount) || 0;
+      const div = document.createElement('div');
+      div.className = 'row-item paid';
+      div.innerHTML = `
+        <div class="row-main">
+          <span class="badge badge-blue">💸</span>
+          <span class="row-name">จ่าย ${row.to}</span>
+          <span class="row-amount">฿${Number(row.amount||0).toLocaleString()}</span>
+        </div>
+        <div class="row-sub">${row.date || ''} ${row.note ? '· ' + row.note : ''}</div>
+        <div class="row-actions">
+          <button onclick="deletePayout('${id}')" class="btn-action btn-del">🗑</button>
+        </div>`;
+      list.appendChild(div);
+    });
+    document.getElementById('payoutsTotal').textContent = '฿' + total.toLocaleString();
+    updateDashboard();
+  }
+
+  window.addPayout = function() {
+    const to = document.getElementById('p_to').value.trim();
+    const amount = document.getElementById('p_amount').value;
+    const date = document.getElementById('p_date').value;
+    const note = document.getElementById('p_note').value.trim();
+    if (!to || !amount) return alert('กรอกข้อมูลให้ครบ');
+    push(ref(db, 'payouts'), { to, amount: Number(amount), date, note, by: currentUser, ts: Date.now() });
+    ['p_to','p_amount','p_note'].forEach(id => document.getElementById(id).value = '');
+    closeModal('modalPayout');
+  };
+
+  window.deletePayout = function(id) {
+    if (confirm('ลบรายการนี้?')) remove(ref(db, 'payouts/' + id));
+  };
+
+  // ===================== EXPENSES =====================
+  function listenExpenses() {
+    onValue(ref(db, 'expenses'), snap => {
+      const data = snap.val() || {};
+      renderExpenses(data);
+    });
+  }
+
+  function renderExpenses(data) {
+    const list = document.getElementById('expensesList');
+    list.innerHTML = '';
+    let total = 0;
+    Object.entries(data).forEach(([id, row]) => {
+      total += Number(row.amount) || 0;
+      const div = document.createElement('div');
+      div.className = 'row-item';
+      div.innerHTML = `
+        <div class="row-main">
+          <span class="badge badge-orange">⚠️</span>
+          <span class="row-name">${row.item}</span>
+          <span class="row-amount">฿${Number(row.amount||0).toLocaleString()}</span>
+        </div>
+        <div class="row-sub">${row.date || ''} ${row.note ? '· ' + row.note : ''}</div>
+        <div class="row-actions">
+          <button onclick="deleteExpense('${id}')" class="btn-action btn-del">🗑</button>
+        </div>`;
+      list.appendChild(div);
+    });
+    document.getElementById('expensesTotal').textContent = '฿' + total.toLocaleString();
+    updateDashboard();
+  }
+
+  window.addExpense = function() {
+    const item = document.getElementById('e_item').value.trim();
+    const amount = document.getElementById('e_amount').value;
+    const date = document.getElementById('e_date').value;
+    const note = document.getElementById('e_note').value.trim();
+    if (!item || !amount) return alert('กรอกข้อมูลให้ครบ');
+    push(ref(db, 'expenses'), { item, amount: Number(amount), date, note, by: currentUser, ts: Date.now() });
+    ['e_item','e_amount','e_note'].forEach(id => document.getElementById(id).value = '');
+    closeModal('modalExpense');
+  };
+
+  window.deleteExpense = function(id) {
+    if (confirm('ลบรายการนี้?')) remove(ref(db, 'expenses/' + id));
+  };
+
+  // ===================== STOCK =====================
+  function listenStock() {
+    onValue(ref(db, 'stock'), snap => {
+      const data = snap.val() || { qty: 88, price: 600 };
+      document.getElementById('stockQty').value = data.qty || 0;
+      document.getElementById('stockPrice').value = data.price || 0;
+      document.getElementById('stockDebt').value = data.debt || 0;
+      calcStock();
+    });
+  }
+
+  window.saveStock = function() {
+    const qty = Number(document.getElementById('stockQty').value) || 0;
+    const price = Number(document.getElementById('stockPrice').value) || 0;
+    const debt = Number(document.getElementById('stockDebt').value) || 0;
+    set(ref(db, 'stock'), { qty, price, debt, by: currentUser, ts: Date.now() });
+    calcStock();
+  };
+
+  window.calcStock = function() {
+    const qty = Number(document.getElementById('stockQty').value) || 0;
+    const price = Number(document.getElementById('stockPrice').value) || 0;
+    const debt = Number(document.getElementById('stockDebt').value) || 0;
+    const total = qty * price;
+    document.getElementById('stockTotal').textContent = '฿' + total.toLocaleString();
+    document.getElementById('stockNet').textContent = '฿' + (total - debt).toLocaleString();
+    updateDashboard();
+  };
+
+  // ===================== DASHBOARD =====================
+  function updateDashboard() {
+    const salesPaid = parseNum(document.getElementById('salesPaid').textContent);
+    const salesPending = parseNum(document.getElementById('salesPending').textContent);
+    const payoutsTotal = parseNum(document.getElementById('payoutsTotal').textContent);
+    const expensesTotal = parseNum(document.getElementById('expensesTotal').textContent);
+    const stockQty = Number(document.getElementById('stockQty').value) || 0;
+    const stockPrice = Number(document.getElementById('stockPrice').value) || 0;
+    const debt = Number(document.getElementById('stockDebt').value) || 0;
+    const stockValue = stockQty * stockPrice;
+    const needMore = debt - (payoutsTotal + expensesTotal);
+    const net = stockValue - (needMore > 0 ? needMore : 0);
+
+    document.getElementById('dash_stockVal').textContent = '฿' + stockValue.toLocaleString();
+    document.getElementById('dash_received').textContent = '฿' + salesPaid.toLocaleString();
+    document.getElementById('dash_pending').textContent = '฿' + salesPending.toLocaleString();
+    document.getElementById('dash_paidOut').textContent = '฿' + (payoutsTotal + expensesTotal).toLocaleString();
+    document.getElementById('dash_debt').textContent = '฿' + debt.toLocaleString();
+    document.getElementById('dash_needMore').textContent = '฿' + (needMore > 0 ? needMore.toLocaleString() : '0');
+    document.getElementById('dash_net').textContent = '฿' + net.toLocaleString();
+  }
+
+  function parseNum(str) {
+    return Number((str || '0').replace(/[฿,]/g, '')) || 0;
+  }
+
+  // ===================== MODAL =====================
+  window.openModal = function(id) { document.getElementById(id).style.display = 'flex'; };
+  window.closeModal = function(id) { document.getElementById(id).style.display = 'none'; };
+
+  window.addEventListener('keydown', e => { if (e.key === 'Enter' && document.getElementById('loginScreen').style.display !== 'none') doLogin(); });
+</script>
+
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #16161a;
+    --surface2: #1e1e24;
+    --border: #2a2a35;
+    --gold: #f0c040;
+    --green: #3ecf6e;
+    --red: #ff5252;
+    --blue: #4fa3ff;
+    --orange: #ff9020;
+    --text: #e8e8f0;
+    --muted: #888899;
+    --font: 'Sarabun', sans-serif;
+    --mono: 'IBM Plex Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    font-size: 15px;
+  }
+
+  /* ===== LOGIN ===== */
+  #loginScreen {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(ellipse at center, #1a1a22 0%, #0a0a0d 100%);
+    z-index: 100;
+  }
+
+  .login-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 48px 40px;
+    text-align: center;
+    width: 320px;
+    box-shadow: 0 0 60px rgba(240,192,64,0.08);
+  }
+
+  .login-logo { font-size: 52px; margin-bottom: 8px; }
+  .login-title { font-size: 22px; font-weight: 700; color: var(--gold); letter-spacing: 1px; margin-bottom: 4px; }
+  .login-sub { color: var(--muted); font-size: 13px; margin-bottom: 32px; }
+
+  .pin-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 24px;
+    letter-spacing: 8px;
+    text-align: center;
+    padding: 14px;
+    margin-bottom: 16px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .pin-input:focus { border-color: var(--gold); }
+
+  .btn-login {
+    width: 100%;
+    background: var(--gold);
+    color: #000;
+    border: none;
+    border-radius: 12px;
+    font-family: var(--font);
+    font-size: 16px;
+    font-weight: 700;
+    padding: 14px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .btn-login:hover { opacity: 0.85; }
+  #pinError { color: var(--red); font-size: 13px; margin-top: 10px; height: 18px; }
+
+  /* ===== APP ===== */
+  #app { display: none; }
+
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 50;
+  }
+
+  .topbar-title { font-size: 18px; font-weight: 700; color: var(--gold); }
+  .topbar-user { font-size: 13px; color: var(--muted); }
+  .btn-logout {
+    background: none; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 8px;
+    padding: 6px 12px; font-family: var(--font); font-size: 12px;
+    cursor: pointer; transition: all 0.2s;
+  }
+  .btn-logout:hover { border-color: var(--red); color: var(--red); }
+
+  /* ===== DASHBOARD ===== */
+  .dashboard {
+    background: linear-gradient(135deg, #16161a, #1a1a20);
+    border-bottom: 1px solid var(--border);
+    padding: 20px;
+  }
+
+  .dash-title { font-size: 11px; letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin-bottom: 14px; }
+
+  .dash-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .dash-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px;
+  }
+
+  .dash-card.highlight {
+    border-color: var(--gold);
+    background: linear-gradient(135deg, #1e1c10, #1a1a0e);
+    grid-column: span 2;
+  }
+
+  .dash-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .dash-val { font-family: var(--mono); font-size: 18px; font-weight: 600; color: var(--text); }
+  .dash-card.highlight .dash-val { font-size: 24px; color: var(--gold); }
+  .dash-val.green { color: var(--green); }
+  .dash-val.red { color: var(--red); }
+  .dash-val.orange { color: var(--orange); }
+
+  /* ===== TABS ===== */
+  .tabs {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+
+  .tab-btn {
+    background: none; border: none;
+    color: var(--muted);
+    font-family: var(--font); font-size: 13px;
+    padding: 14px 14px 12px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+
+  .tab-btn.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+  /* ===== SECTION ===== */
+  .section { padding: 16px; display: none; }
+  .section.active { display: block; }
+
+  .section-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+
+  .section-title { font-size: 14px; font-weight: 700; color: var(--text); }
+  .section-sum { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+
+  .btn-add {
+    background: var(--gold);
+    color: #000;
+    border: none;
+    border-radius: 10px;
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 16px;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .btn-add:hover { opacity: 0.85; }
+
+  /* ===== ROW ITEMS ===== */
+  .row-item {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+  }
+
+  .row-item.paid { border-left: 3px solid var(--green); }
+  .row-item.pending { border-left: 3px solid var(--red); }
+
+  .row-main {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .row-name { flex: 1; font-weight: 600; font-size: 14px; }
+  .row-amount { font-family: var(--mono); font-weight: 600; font-size: 14px; color: var(--gold); }
+  .row-sub { font-size: 12px; color: var(--muted); margin-bottom: 8px; margin-left: 30px; }
+
+  .row-actions { display: flex; gap: 6px; margin-left: 30px; }
+
+  .btn-action {
+    border: none; border-radius: 8px;
+    font-family: var(--font); font-size: 12px;
+    padding: 4px 10px; cursor: pointer; transition: all 0.2s;
+  }
+
+  .btn-toggle { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+  .btn-toggle:hover { border-color: var(--blue); color: var(--blue); }
+  .btn-del { background: none; color: var(--muted); border: 1px solid transparent; }
+  .btn-del:hover { color: var(--red); border-color: var(--red); }
+
+  /* ===== BADGE ===== */
+  .badge { font-size: 14px; }
+
+  /* ===== STOCK SECTION ===== */
+  .stock-form {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .stock-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
+  .stock-label { font-size: 12px; color: var(--muted); width: 120px; flex-shrink: 0; }
+  .stock-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 8px 12px;
+    outline: none;
+  }
+
+  .stock-input:focus { border-color: var(--gold); }
+
+  .stock-result {
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 14px;
+    margin-top: 12px;
+  }
+
+  .stock-result-row {
+    display: flex; justify-content: space-between;
+    font-size: 13px; margin-bottom: 6px;
+  }
+
+  .stock-result-row:last-child { margin-bottom: 0; font-weight: 700; color: var(--gold); }
+
+  /* ===== MODAL ===== */
+  .modal {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 200;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .modal-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px 20px 0 0;
+    padding: 24px 20px 32px;
+    width: 100%;
+    max-width: 480px;
+    animation: slideUp 0.25s ease;
+  }
+
+  @keyframes slideUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+
+  .modal-title {
+    font-size: 16px; font-weight: 700;
+    margin-bottom: 20px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+
+  .modal-close {
+    background: none; border: none;
+    color: var(--muted); font-size: 20px;
+    cursor: pointer; line-height: 1;
+  }
+
+  .form-row { margin-bottom: 12px; }
+  .form-label { font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+
+  .form-input, .form-select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .form-input:focus, .form-select:focus { border-color: var(--gold); }
+  .form-select option { background: var(--surface2); }
+
+  .form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btn-submit {
+    width: 100%; background: var(--gold); color: #000;
+    border: none; border-radius: 12px;
+    font-family: var(--font); font-size: 15px; font-weight: 700;
+    padding: 13px; cursor: pointer; margin-top: 8px;
+    transition: opacity 0.2s;
+  }
+  .btn-submit:hover { opacity: 0.85; }
+
+  .empty-state { text-align: center; color: var(--muted); font-size: 13px; padding: 30px; }
+</style>
+</head>
+<body>
+
+<!-- ===== LOGIN ===== -->
+<div id="loginScreen">
+  <div class="login-box">
+    <div class="login-logo">🪎</div>
+    <div class="login-title">DOM TRACKER</div>
+    <div class="login-sub">กรอก PIN เพื่อเข้าสู่ระบบ</div>
+    <input type="password" id="pinInput" class="pin-input" maxlength="4" placeholder="····" inputmode="numeric" autofocus>
+    <button class="btn-login" onclick="doLogin()">เข้าสู่ระบบ</button>
+    <div id="pinError"></div>
+  </div>
+</div>
+
+<!-- ===== APP ===== -->
+<div id="app">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="topbar-title">🪎 DOM</div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="topbar-user" id="userLabel"></span>
+      <button class="btn-logout" onclick="doLogout()">ออก</button>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div class="dashboard">
+    <div class="dash-title">📊 ภาพรวม</div>
+    <div class="dash-grid">
+      <div class="dash-card">
+        <div class="dash-label">💎 มูลค่า Stock</div>
+        <div class="dash-val" id="dash_stockVal">-</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-label">🔥 หนี้คงค้าง</div>
+        <div class="dash-val red" id="dash_debt">-</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-label">✅ รับแล้ว</div>
+        <div class="dash-val green" id="dash_received">-</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-label">❌ ค้างรับ</div>
+        <div class="dash-val orange" id="dash_pending">-</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-label">💸 จ่ายออกแล้ว</div>
+        <div class="dash-val" id="dash_paidOut">-</div>
+      </div>
+      <div class="dash-card">
+        <div class="dash-label">⚠️ ต้องหาเพิ่ม</div>
+        <div class="dash-val red" id="dash_needMore">-</div>
+      </div>
+      <div class="dash-card highlight">
+        <div class="dash-label">🩵 เงินเหลือสุทธิ (ประมาณ)</div>
+        <div class="dash-val" id="dash_net">-</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('sales',this)">🪎 ยอดขาย</button>
+    <button class="tab-btn" onclick="switchTab('payouts',this)">✅ จ่ายออก</button>
+    <button class="tab-btn" onclick="switchTab('expenses',this)">⚠️ ค่าใช้จ่าย</button>
+    <button class="tab-btn" onclick="switchTab('stock',this)">💎 Stock</button>
+  </div>
+
+  <!-- SALES -->
+  <div class="section active" id="tab-sales">
+    <div class="section-header">
+      <div>
+        <div class="section-title">รายการขาย</div>
+        <div class="section-sum">รับแล้ว <span id="salesPaid">฿0</span> · ค้าง <span id="salesPending">฿0</span></div>
+      </div>
+      <button class="btn-add" onclick="openModal('modalSale')">+ เพิ่ม</button>
+    </div>
+    <div id="salesList"><div class="empty-state">ยังไม่มีรายการ</div></div>
+  </div>
+
+  <!-- PAYOUTS -->
+  <div class="section" id="tab-payouts">
+    <div class="section-header">
+      <div>
+        <div class="section-title">รายการจ่ายออก</div>
+        <div class="section-sum">รวม <span id="payoutsTotal">฿0</span></div>
+      </div>
+      <button class="btn-add" onclick="openModal('modalPayout')">+ เพิ่ม</button>
+    </div>
+    <div id="payoutsList"><div class="empty-state">ยังไม่มีรายการ</div></div>
+  </div>
+
+  <!-- EXPENSES -->
+  <div class="section" id="tab-expenses">
+    <div class="section-header">
+      <div>
+        <div class="section-title">ค่าใช้จ่าย (โกล)</div>
+        <div class="section-sum">รวม <span id="expensesTotal">฿0</span></div>
+      </div>
+      <button class="btn-add" onclick="openModal('modalExpense')">+ เพิ่ม</button>
+    </div>
+    <div id="expensesList"><div class="empty-state">ยังไม่มีรายการ</div></div>
+  </div>
+
+  <!-- STOCK -->
+  <div class="section" id="tab-stock">
+    <div class="section-header">
+      <div class="section-title">💎 จัดการ Stock</div>
+    </div>
+    <div class="stock-form">
+      <div class="stock-row">
+        <div class="stock-label">จำนวน (ซอง)</div>
+        <input type="number" id="stockQty" class="stock-input" value="88" oninput="calcStock()">
+      </div>
+      <div class="stock-row">
+        <div class="stock-label">ราคา/ซอง (฿)</div>
+        <input type="number" id="stockPrice" class="stock-input" value="600" oninput="calcStock()">
+      </div>
+      <div class="stock-row">
+        <div class="stock-label">🔥 หนี้คงค้าง (฿)</div>
+        <input type="number" id="stockDebt" class="stock-input" value="28000" oninput="calcStock()">
+      </div>
+      <button class="btn-add" style="width:100%;margin-top:4px" onclick="saveStock()">💾 บันทึก Stock</button>
+      <div class="stock-result">
+        <div class="stock-result-row">
+          <span>มูลค่า Stock รวม</span>
+          <span id="stockTotal">฿52,800</span>
+        </div>
+        <div class="stock-result-row">
+          <span>🩵 เหลือสุทธิ (Stock - หนี้)</span>
+          <span id="stockNet">฿24,800</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- end app -->
+
+<!-- ===== MODALS ===== -->
+
+<!-- Modal Sale -->
+<div class="modal" id="modalSale">
+  <div class="modal-box">
+    <div class="modal-title">
+      🪎 เพิ่มรายการขาย
+      <button class="modal-close" onclick="closeModal('modalSale')">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-label">ชื่อลูกค้า *</div>
+      <input type="text" id="s_customer" class="form-input" placeholder="เช่น ก้อง, พี่ตูน">
+    </div>
+    <div class="form-row form-row-2">
+      <div>
+        <div class="form-label">จำนวน (ซอง)</div>
+        <input type="number" id="s_qty" class="form-input" placeholder="0">
+      </div>
+      <div>
+        <div class="form-label">ยอดเงิน (฿) *</div>
+        <input type="number" id="s_amount" class="form-input" placeholder="0">
+      </div>
+    </div>
+    <div class="form-row form-row-2">
+      <div>
+        <div class="form-label">วันที่</div>
+        <input type="date" id="s_date" class="form-input">
+      </div>
+      <div>
+        <div class="form-label">สถานะ</div>
+        <select id="s_status" class="form-select">
+          <option value="pending">❌ ค้างจ่าย</option>
+          <option value="paid">✅ จ่ายแล้ว</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-label">หมายเหตุ</div>
+      <input type="text" id="s_note" class="form-input" placeholder="เช่น สงกราน, ค้างเก่า">
+    </div>
+    <button class="btn-submit" onclick="addSale()">✅ บันทึก</button>
+  </div>
+</div>
+
+<!-- Modal Payout -->
+<div class="modal" id="modalPayout">
+  <div class="modal-box">
+    <div class="modal-title">
+      💸 เพิ่มรายการจ่ายออก
+      <button class="modal-close" onclick="closeModal('modalPayout')">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-label">จ่ายให้ใคร *</div>
+      <input type="text" id="p_to" class="form-input" placeholder="เช่น อาม">
+    </div>
+    <div class="form-row form-row-2">
+      <div>
+        <div class="form-label">ยอดเงิน (฿) *</div>
+        <input type="number" id="p_amount" class="form-input" placeholder="0">
+      </div>
+      <div>
+        <div class="form-label">วันที่</div>
+        <input type="date" id="p_date" class="form-input">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-label">หมายเหตุ</div>
+      <input type="text" id="p_note" class="form-input" placeholder="หมายเหตุ">
+    </div>
+    <button class="btn-submit" onclick="addPayout()">✅ บันทึก</button>
+  </div>
+</div>
+
+<!-- Modal Expense -->
+<div class="modal" id="modalExpense">
+  <div class="modal-box">
+    <div class="modal-title">
+      ⚠️ เพิ่มค่าใช้จ่าย
+      <button class="modal-close" onclick="closeModal('modalExpense')">✕</button>
+    </div>
+    <div class="form-row">
+      <div class="form-label">รายการ *</div>
+      <input type="text" id="e_item" class="form-input" placeholder="เช่น น้ำมัน, จ่าย ตต">
+    </div>
+    <div class="form-row form-row-2">
+      <div>
+        <div class="form-label">ยอดเงิน (฿) *</div>
+        <input type="number" id="e_amount" class="form-input" placeholder="0">
+      </div>
+      <div>
+        <div class="form-label">วันที่</div>
+        <input type="date" id="e_date" class="form-input">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-label">หมายเหตุ</div>
+      <input type="text" id="e_note" class="form-input" placeholder="หมายเหตุ">
+    </div>
+    <button class="btn-submit" onclick="addExpense()">✅ บันทึก</button>
+  </div>
+</div>
+
+<script>
+function switchTab(name, btn) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>
